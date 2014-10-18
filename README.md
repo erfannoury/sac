@@ -34,7 +34,9 @@ Finally, to compile the estimation method, run `mex <model.cpp> -I"path\to\Eigen
 
 e.g. to compile the Homography estimator model, run:
 
-`mex homography_estimator.cpp -I"path\to\Eigen\folder"`
+```matlab
+mex homography_estimator.cpp -I"path\to\Eigen\folder"
+```
 
 #Syntax for using Estimation models:
 ###Homography Estimator:
