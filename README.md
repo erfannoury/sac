@@ -6,10 +6,10 @@ sac
 These codes consist of two parts.
 1. Sample Consensus methods and implementations
 
-    Currently only consensus methods of `ransac`, `prosac` and `mlesac` are included. Other methods maybe added later.
+Currently only consensus methods of `ransac`, `prosac` and `mlesac` are included. Other methods maybe added later.
 2. Model estimation implementations
 
-    Currently only two model estimations are included as samples, `homography_estimator` and `line_estimator`. You can implement other model estimators based on these samples provided. More documentation on this will be added later.
+Currently only two model estimations are included as samples, `homography_estimator` and `line_estimator`. You can implement other model estimators based on these samples provided. More documentation on this will be added later.
 
 #Code origin
 __These codes are not mine__!
