@@ -142,46 +142,44 @@ void mexFunction(int nlhs, mxArray *plhs [], int nrhs, const mxArray*prhs [])
 		corr.p1.y = points1[dim1y + j];
 		corr.p2.y = points2[dim1y + j];*/
 		pnts[j] = Point(points[j], points[dimy + j]);
-		Line lineModel;
-		RansacParameters params;
-		params.error_thresh = 0.5;
-		LineEstimator lineEstimator;
-		SampleConsensusEstimator<LineEstimator> *sacEstimator;
-		// RANSAC mode
-		if (!strcmp("ransac", modeStr))
-		{
-			sacEstimator = new Ransac<LineEstimator>(params, lineEstimator);
-		}
-		// MLESAC mode
-		else if (!strcmp("mlesac", modeStr))
-		{
-			sacEstimator = new Mlesac<LineEstimator>(params, lineEstimator);
-		}
-		// PROSAC mode
-		else if (!strcmp("prosac", modeStr))
-		{
-			sacEstimator = new Prosac<LineEstimator>(params, lineEstimator);
-		}
-		// Unknown mode
-		else
-		{
-			mexPrintf("Error! unknown estimation mode selected!\n");
-			return;
-		}
-
-
-		sacEstimator->Initialize();
-		RansacSummary summary;
-		sacEstimator->Estimate(pnts, &lineModel, &summary);
-
-		auto outArray = mxCreateDoubleMatrix(1, 2, mxREAL);
-		double *outp = mxGetPr(outArray);
-		// Copy the estimated homography matrix to the output matrix, note the difference between matrix's column-wise arrays vs. C's row-wise arrays convention
-		outp[0] = lineModel.m;
-		outp[1] = lineModel.b;
-
-		plhs[0] = outArray;
 	}
+	Line lineModel;
+	RansacParameters params;
+	params.error_thresh = 0.5;
+	LineEstimator lineEstimator;
+	SampleConsensusEstimator<LineEstimator> *sacEstimator;
+	// RANSAC mode
+	if (!strcmp("ransac", modeStr))
+	{
+		sacEstimator = new Ransac<LineEstimator>(params, lineEstimator);
+	}
+	// MLESAC mode
+	else if (!strcmp("mlesac", modeStr))
+	{
+		sacEstimator = new Mlesac<LineEstimator>(params, lineEstimator);
+	}
+	// PROSAC mode
+	else if (!strcmp("prosac", modeStr))
+	{
+		sacEstimator = new Prosac<LineEstimator>(params, lineEstimator);
+	}
+	// Unknown mode
+	else
+	{
+		mexPrintf("Error! unknown estimation mode selected!\n");
+		return;
+	}
+
+
+	sacEstimator->Initialize();
+	RansacSummary summary;
+	sacEstimator->Estimate(pnts, &lineModel, &summary);
+
+	auto outArray = mxCreateDoubleMatrix(1, 2, mxREAL);
+	double *outp = mxGetPr(outArray);
+	// Copy the estimated homography matrix to the output matrix, note the difference between matrix's column-wise arrays vs. C's row-wise arrays convention
+	outp[0] = lineModel.m;
+	outp[1] = lineModel.b;
+
+	plhs[0] = outArray;
 }
-
-

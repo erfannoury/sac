@@ -21,7 +21,7 @@ using namespace theia;
 using namespace Eigen;
 
 // Structure for a 2-D point
-struct Point 
+struct Point
 {
 	double x;
 	double y;
@@ -99,9 +99,9 @@ public:
 		}
 
 		MatrixXd qtq = Q.transpose() * Q;
-		JacobiSVD<MatrixXd> svd(qtq, ComputeThinU | ComputeThinV);
+		JacobiSVD<MatrixXd> svd(qtq, ComputeThinV);
 		svd.computeV();
-		auto minEigenVector = svd.matrixV().col(8);
+		MatrixXd minEigenVector = svd.matrixV().col(8);
 		for (size_t i = 0; i < 9; i++)
 		{
 			model.Matrix[i] = minEigenVector(i);
@@ -127,7 +127,7 @@ public:
 // H -> 9-by-9 homography matrix as output
 // points1 -> n-by-2 matrix, coordinates of the keypoints of the first image
 // points2 -> n-by-2 matrix, coordinates of the keypoints of the second image
-// 'mode' -> {'ransac', 'prosac', 'mlesac'} 
+// 'mode' -> {'ransac', 'prosac', 'mlesac'}
 void mexFunction(int nlhs, mxArray *plhs [], int nrhs, const mxArray*prhs [])
 {
 	if (nlhs != 1)
@@ -184,49 +184,50 @@ void mexFunction(int nlhs, mxArray *plhs [], int nrhs, const mxArray*prhs [])
 		corr.p1.y = points1[dim1y + j];
 		corr.p2.y = points2[dim1y + j];*/
 		correspondences[j] = Correspondence(points1[j], points1[dim1y + j], points2[j], points2[dim1y + j]);
-		Homography homographyModel;
-		RansacParameters params;
-		params.error_thresh = 0.5;
-		HomographyEstimator homographyEstimator;
-		SampleConsensusEstimator<HomographyEstimator> *sacEstimator;
-		// RANSAC mode
-		if (!strcmp("ransac", modeStr))
-		{
-			sacEstimator = new Ransac<HomographyEstimator>(params, homographyEstimator);
-		}
-		// MLESAC mode
-		else if (!strcmp("mlesac", modeStr))
-		{
-			sacEstimator = new Mlesac<HomographyEstimator>(params, homographyEstimator);
-		}
-		// PROSAC mode
-		else if (!strcmp("prosac", modeStr))
-		{
-			sacEstimator = new Prosac<HomographyEstimator>(params, homographyEstimator);
-		}
-		// Unknown mode
-		else
-		{
-			mexPrintf("Error! unknown estimation mode selected!\n");
-			return;
-		}
-
-
-		sacEstimator->Initialize();
-		RansacSummary summary;
-		sacEstimator->Estimate(correspondences, &homographyModel, &summary);
-
-		auto outArray = mxCreateDoubleMatrix(3, 3, mxREAL);
-		double *outp = mxGetPr(outArray);
-		// Copy the estimated homography matrix to the output matrix, note the difference between matrix's column-wise arrays vs. C's row-wise arrays convention
-		for (size_t i = 0; i < 3; i++)
-		{
-			for (size_t j = 0; j < 3; j++)
-			{
-				outp[i * 3 + j] = homographyModel.Matrix[j * 3 + i];
-			}
-		}
-
-		plhs[0] = outArray;
 	}
+	Homography homographyModel;
+	RansacParameters params;
+	params.error_thresh = 0.5;
+	HomographyEstimator homographyEstimator;
+	SampleConsensusEstimator<HomographyEstimator> *sacEstimator;
+	// RANSAC mode
+	if (!strcmp("ransac", modeStr))
+	{
+		sacEstimator = new Ransac<HomographyEstimator>(params, homographyEstimator);
+	}
+	// MLESAC mode
+	else if (!strcmp("mlesac", modeStr))
+	{
+		sacEstimator = new Mlesac<HomographyEstimator>(params, homographyEstimator);
+	}
+	// PROSAC mode
+	else if (!strcmp("prosac", modeStr))
+	{
+		sacEstimator = new Prosac<HomographyEstimator>(params, homographyEstimator);
+	}
+	// Unknown mode
+	else
+	{
+		mexPrintf("Error! unknown estimation mode selected!\n");
+		return;
+	}
+
+
+	sacEstimator->Initialize();
+	RansacSummary summary;
+	sacEstimator->Estimate(correspondences, &homographyModel, &summary);
+
+	auto outArray = mxCreateDoubleMatrix(3, 3, mxREAL);
+	double *outp = mxGetPr(outArray);
+	// Copy the estimated homography matrix to the output matrix, note the difference between matrix's column-wise arrays vs. C's row-wise arrays convention
+	auto lastElement = homographyModel.Matrix[8];
+	for (size_t i = 0; i < 3; i++)
+	{
+		for (size_t j = 0; j < 3; j++)
+		{
+			outp[i * 3 + j] = homographyModel.Matrix[j * 3 + i] / lastElement;
+		}
+	}
+
+	plhs[0] = outArray;
 }
