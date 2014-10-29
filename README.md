@@ -30,7 +30,7 @@ First you should have a compatible compiler installed in your system.
 
 Then run `mex -setup` and setup your compiler of choice to be used by MATLAB.
 
-Finally, to compile the estimation method, run `mex <model.cpp> -I"path\to\Eigen\folder"`.
+Finally, to compile the estimation model, run `mex model_code.cpp -I"path\to\Eigen\folder"`.
 
 e.g. to compile the Homography estimator model, run:
 
