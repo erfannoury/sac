@@ -7,6 +7,9 @@
 #include <chrono>
 #include <random>
 #include <vector>
+
+#include <Eigen\Eigen>
+#include <Eigen\LU>
 #include <Eigen\Dense>
 #include <Eigen\SVD>
 
@@ -17,65 +20,24 @@
 #include "Prosac.hpp"
 #include "Lmeds.hpp"
 
+
 using namespace std;
 using namespace Eigen;
 using namespace aslam;
-// Structure for a 2-D point
-struct Point
-{
-	double x;
-	double y;
-	Point() {}
-	Point(double _x, double _y) : x(_x), y(_y) {}
-	Point(const Point& p)
-	{
-		x = p.x;
-		y = p.y;
-	}
-};
 
-// A pair of points that correspond to each other. These two points are two keypoints in to separate images that have been matched to each other
-struct Correspondence
-{
-	Point p1;
-	Point p2;
-	Correspondence() {}
-	Correspondence(double x1, double y1, double x2, double y2)
-	{
-		p1.x = x1;
-		p1.y = y1;
-		p2.x = x2;
-		p2.y = y2;
-	}
-	Correspondence(Point& _p1, Point& _p2) : p1(_p1), p2(_p2) {}
-	Correspondence(const Correspondence& other) : p1(other.p1), p2(other.p2) { }
-};
 
-// Homography matrix is a 3-by-3 matrix which is the model we are trying to estimate
-struct Homography
-{
-	double Matrix[9];
-	Homography() {}
-	Homography(const Homography& other)
-	{
-		for (size_t i = 0; i < 9; i++)
-		{
-			Matrix[i] = other.Matrix[i];
-		}
-	}
-};
-
-class HomographyEstimatorProblem : public aslam::SampleConsensusProblem <Homography>
+class HomographyEstimatorProblem : public aslam::SampleConsensusProblem <MatrixXd>
 {
 public:
 	HomographyEstimatorProblem() { }
 	virtual ~HomographyEstimatorProblem() { }
 
-	size_t numElements() const{ return points_.size(); }
+	size_t numElements() const{ return points1_.rows(); }
 
 	virtual int getSampleSize() const { return 4; }
 
-	virtual bool computeModelCoefficients(const std::vector<int> & indices, Homography & model) const
+	// Take a subset of size 4 of points and estimate homography matrix using them
+	virtual bool computeModelCoefficients(const std::vector<int> & indices, MatrixXd& model) const
 	{
 		if (indices.size() != getSampleSize())
 		{
@@ -83,101 +45,133 @@ public:
 			return false;
 		}
 
-		//calculate homography -- see gc_lecture_notes pp. 17-19
-		MatrixXd Q = MatrixXd::Zero(2 * indices.size(), 9);
-		for (size_t i = 0; i < indices.size(); i++)
+		MatrixXd p1(indices.size(), 3);
+		MatrixXd p2(indices.size(), 3);
+		for (int i = 0; i < indices.size(); i++)
 		{
-			Q(i, 0) = points_[indices[i]].p2.x;
-			Q(i, 1) = points_[indices[i]].p2.y;
-			Q(i, 2) = 1.0;
-			Q(i, 6) = -1 * points_[indices[i]].p2.x * points_[indices[i]].p1.x;
-			Q(i, 7) = -1 * points_[indices[i]].p2.y * points_[indices[i]].p1.x;
-			Q(i, 8) = -1 * points_[indices[i]].p1.x;
-
-			Q(i + indices.size(), 3) = points_[indices[i]].p2.x;
-			Q(i + indices.size(), 4) = points_[indices[i]].p2.y;
-			Q(i + indices.size(), 5) = 1.0;
-			Q(i + indices.size(), 6) = -1.0 * points_[indices[i]].p2.x * points_[indices[i]].p1.y;
-			Q(i + indices.size(), 7) = -1.0 * points_[indices[i]].p2.y * points_[indices[i]].p1.y;
-			Q(i + indices.size(), 8) = -1.0 * points_[indices[i]].p1.y;
-			// mexPrintf("p1.x = %lf, p1.y = %ld; p2.x = %lf, p2.y = %lf\n", points_[indices[i]].p1.x, points_[indices[i]].p1.y, points_[indices[i]].p2.x, points_[indices[i]].p2.y);
+			p1.row(i) = points1_.row(indices[i]);
+			p2.row(i) = points2_.row(indices[i]);
 		}
+		auto H = calculateHomography(p1, p2);
 
-		MatrixXd qtq = Q.transpose() * Q;
-		JacobiSVD<MatrixXd> svd(qtq, ComputeThinV);
-		svd.computeV();
-		MatrixXd minEigenVector = svd.matrixV().col(8);
-		for (size_t i = 0; i < 9; i++)
-		{
-			model.Matrix[i] = minEigenVector(i) /*/minEigenVector(8)*/;
-			// mexPrintf("minEigenVector(%d) = %lf\n", i, minEigenVector(i));
-		}
+		model = H;
 		// end calculate homography
 		return true;
 	}
 
-	virtual void optimizeModelCoefficients(const vector<int> & inliers, const Homography& model, Homography& optimized_model)
+	virtual void optimizeModelCoefficients(const vector<int> & inliers, const MatrixXd& model, MatrixXd& optimized_model)
 	{
-		// optimized_model = Homography(model);
-		for (int i = 0; i < 9; i++)
-		{
-			optimized_model.Matrix[i] = model.Matrix[i];
-		}
+		optimized_model = model;
 	}
 
-	void calculateModelUsingAllInliers(const vector<int>& inliers, Homography& finalModel)
+	// It will return a matrix H, the homography matrix, such that x1=H*x2
+	// Note: points are assumed to be normalized and in homogeneous coordinate
+	// Sizes of two sets of points must be equal. for performace purposes, this condition is not checked in this function
+	// Note: since normalise2Dpoints works in-place on the points matrix, normalizing points inside this function will 
+	// harm our collection of points. But because of two observations, we are allowed to normalise points inside this function
+	// and it will cause no harm:
+	//	1) Points from each step of ransac will be passed to this function to calculate the homography matrix. To do so, we will 
+	//	   copy those points from the main point matrix to temporary matrices. So normalisation won't affect the original matrix.
+	//  2) After exhausting the SAC operation, the final Homography matrix will be calculated using all of the inliers. After this
+	//	   calculation, the program will return. So affecting the data points, won't do harm.
+	MatrixXd calculateHomography(MatrixXd& x1, MatrixXd& x2) const
 	{
-		MatrixXd Q = MatrixXd::Zero(2 * inliers.size(), 9);
-		for (size_t i = 0; i < inliers.size(); i++)
+		MatrixXd T1, T2;
+		normalize2Dpoints(x1, T1);
+		normalize2Dpoints(x2, T2);
+		MatrixXd A = MatrixXd::Zero(3 * x1.rows(), 9);
+		for (int i = 0; i < x1.rows(); i++)
 		{
-			Q(i, 0) = points_[inliers[i]].p2.x;
-			Q(i, 1) = points_[inliers[i]].p2.y;
-			Q(i, 2) = 1.0;
-			Q(i, 6) = -1 * points_[inliers[i]].p2.x * points_[inliers[i]].p1.x;
-			Q(i, 7) = -1 * points_[inliers[i]].p2.y * points_[inliers[i]].p1.x;
-			Q(i, 8) = -1 * points_[inliers[i]].p1.x;
+			A(3 * i, 3) = -x1(i, 0);
+			A(3 * i, 4) = -x1(i, 1);
+			A(3 * i, 5) = -x1(i,2);
+			A(3 * i, 6) = x2(i, 1) * x1(i, 0);
+			A(3 * i, 7) = x2(i, 1) * x1(i, 1);
+			A(3 * i, 8) = x2(i, 1) * x1(i, 2);
 
-			Q(i + inliers.size(), 3) = points_[inliers[i]].p2.x;
-			Q(i + inliers.size(), 4) = points_[inliers[i]].p2.y;
-			Q(i + inliers.size(), 5) = 1.0;
-			Q(i + inliers.size(), 6) = -1.0 * points_[inliers[i]].p2.x * points_[inliers[i]].p1.y;
-			Q(i + inliers.size(), 7) = -1.0 * points_[inliers[i]].p2.y * points_[inliers[i]].p1.y;
-			Q(i + inliers.size(), 8) = -1.0 * points_[inliers[i]].p1.y;
-				// mexPrintf("p1.x = %lf, p1.y = %ld; p2.x = %lf, p2.y = %lf\n", points_[indices[i]].p1.x, points_[indices[i]].p1.y, points_[indices[i]].p2.x, points_[indices[i]].p2.y);
+			A(3 * i + 1, 0) = x1(i, 0);
+			A(3 * i + 1, 1) = x1(i, 1);
+			A(3 * i + 1, 2) = x1(i, 2);
+			A(3 * i + 1, 6) = -x2(i, 0) * x1(i, 0);
+			A(3 * i + 1, 7) = -x2(i, 0) * x1(i, 1);
+			A(3 * i + 1, 8) = -x2(i, 0) * x1(i, 2);
+
+			A(3 * i + 2, 0) = x2(i, 1) * x1(i, 0);
+			A(3 * i + 2, 1) = x2(i, 1) * x1(i, 1);
+			A(3 * i + 2, 2) = x2(i, 1) * x1(i, 2);
+			A(3 * i + 2, 3) = x2(i, 0) * x1(i, 0);
+			A(3 * i + 2, 4) = x2(i, 0) * x1(i, 1);
+			A(3 * i + 2, 5) = x2(i, 0) * x1(i, 2);
 		}
-
-		MatrixXd qtq = Q.transpose() * Q;
-		JacobiSVD<MatrixXd> svd(qtq, ComputeThinV);
+		JacobiSVD<MatrixXd> svd(A, ComputeThinV);
 		svd.computeV();
-		MatrixXd minEigenVector = svd.matrixV().col(8);
-		for (size_t i = 0; i < 9; i++)
+		MatrixXd minEigenVector = MatrixXd(svd.matrixV().col(8));
+		minEigenVector.resize(3, 3);
+		auto H = T2.inverse() * minEigenVector * T1;
+		return H;
+	}
+
+	// As the final step, estimate the homography matrix using all of the inlier correspondences
+	void calculateModelUsingAllInliers(const vector<int>& inliers, MatrixXd& finalModel)
+	{
+		MatrixXd p1(inliers.size(), 3);
+		MatrixXd p2(inliers.size(), 3);
+		for (int i = 0; i < inliers.size(); i++)
 		{
-			finalModel.Matrix[i] = minEigenVector(i) /*/minEigenVector(8)*/;
-			// mexPrintf("minEigenVector(%d) = %lf\n", i, minEigenVector(i));
+			p1.row(i) = points1_.row(inliers[i]);
+			p2.row(i) = points2_.row(inliers[i]);
 		}
+		auto H = calculateHomography(p1, p2);
+
+		finalModel = H;
 	}
 
 	/// evaluate the score for the elements at indices based on this model.
 	/// low scores mean a good fit.
-	virtual void getSelectedDistancesToModel(const Homography & model, const vector<int> & indices, vector<double> & scores) const
+	virtual void getSelectedDistancesToModel(const MatrixXd& model, const vector<int> & indices, vector<double> & scores) const
 	{
 		scores.resize(indices.size());
 		// Iterate through correspondences and calculate the projection error
+		
+		auto H = model;
 		for (size_t i = 0; i < indices.size(); ++i)
 		{
-			// calculate the reproject error
-			auto correspondence = points_[indices[i]];
-
-			double projectionPointZ = model.Matrix[6] * correspondence.p1.x + model.Matrix[7] * correspondence.p1.y + model.Matrix[8];
-			double projectionPointX = (model.Matrix[0] * correspondence.p1.x + model.Matrix[1] * correspondence.p1.y + model.Matrix[2]) / projectionPointZ;
-			double projectionPointY = (model.Matrix[3] * correspondence.p1.x + model.Matrix[4] * correspondence.p1.y + model.Matrix[5]) / projectionPointZ;
-
-			// scores[i] = (double) (fabs(projectionPointX - correspondence.p2.x) + fabs(projectionPointY - correspondence.p2.y));
-			scores[i] = (projectionPointX - correspondence.p2.x)*(projectionPointX - correspondence.p2.x) + (projectionPointY - correspondence.p2.y)*(projectionPointY - correspondence.p2.y);
+			auto x1 = points1_.row(indices[i]);
+			auto x2 = points2_.row(indices[i]);
+			auto Hx1 = H * x1;
+			auto invHx2 = H.inverse() * x2;
+			x1 /= x1(2);
+			x2 /= x2(2);
+			Hx1 /= Hx1(2);
+			invHx2 /= invHx2(2);
+			scores[i] = (x1 - invHx2).unaryExpr([](double a) {return a*a; }).sum() + (x2 - Hx1).unaryExpr([](double a) {return a*a; }).sum();
 		}
 	}
 
-	vector<Correspondence> points_;
+	// normalize 2d points so that they would have a zero mean and their mean distance from origin would be sqrt(2)
+	void normalize2Dpoints(MatrixXd& points, MatrixXd& normalizationMat) const
+	{
+		double meanx = points.col(0).mean();
+		double meany = points.col(1).mean();
+		/*auto colx = points.col(0).unaryExpr([meanx](double x) { return x - meanx; });
+		auto coly = points.col(1).unaryExpr([meany](double y) { return y - meany; });
+		auto dist = (colx.unaryExpr([](double x) { return x*x; }) + coly.unaryExpr([](double y) {return y*y; })).unaryExpr([](double d) {return sqrt(d); });*/
+		double meandist = (points.col(0).unaryExpr([meanx](double x) { return (x - meanx)*(x - meanx); }) + points.col(1).unaryExpr([meany](double y) { return (y - meany)*(y - meany); }))
+			.unaryExpr([](double d){return sqrt(d); }).mean();
+		double scale = sqrt(2) / meandist;
+
+		MatrixXd T(3, 3);
+		T << scale, 0, -scale*meanx
+			, 0, scale, -scale*meany
+			, 0, 0, 1;
+		points = (T*points.transpose()).transpose();
+		normalizationMat = T;
+	}
+
+	MatrixXd points1_;
+	MatrixXd norm1_;
+	MatrixXd points2_;
+	MatrixXd norm2_;
 };
 
 
@@ -240,9 +234,20 @@ void mexFunction(int nlhs, mxArray *plhs [], int nrhs, const mxArray*prhs [])
 
 	mexPrintf("string:\n%s\n", modeStr);
 	mexPrintf("dimx = %d, dimy = %d\n", dim1x, dim1y);
-	vector<Correspondence> correspondences(dim1y);
+	//vector<Correspondence> correspondences(dim1y);
 	points1 = mxGetPr(prhs[0]);
 	points2 = mxGetPr(prhs[1]);
+
+	boost::shared_ptr<HomographyEstimatorProblem> homoproblem_ptr(new HomographyEstimatorProblem);
+	HomographyEstimatorProblem& homoproblem = *homoproblem_ptr;
+	homoproblem.points1_.resize(dim1y, 3);
+	homoproblem.points1_.col(2).setOnes();
+	homoproblem.points2_.resize(dim1y, 3);
+	homoproblem.points2_.col(2).setOnes();
+	homoproblem.setUniformIndices(dim1y);
+
+
+
 	for (size_t j = 0; j < dim1y; j++)
 	{
 		/*Correspondence corr;
@@ -250,33 +255,36 @@ void mexFunction(int nlhs, mxArray *plhs [], int nrhs, const mxArray*prhs [])
 		corr.p2.x = points2[j];
 		corr.p1.y = points1[dim1y + j];
 		corr.p2.y = points2[dim1y + j];*/
-		correspondences[j] = Correspondence(points1[j], points1[dim1y + j], points2[j], points2[dim1y + j]);
+		//correspondences[j] = Correspondence(points1[j], points1[dim1y + j], points2[j], points2[dim1y + j]);
 		//  mexPrintf("correspondence[%d] = (%lf, %lf; %lf, %lf)\n", j, points1[j], points1[dim1y + j], points2[j], points2[dim1y + j]);
 		// mexPrintf("correspondence[%d] = (%lf, %lf; %lf, %lf)\n", j, correspondences[j].p1.x, correspondences[j].p1.y, correspondences[j].p2.x, correspondences[j].p2.y);
+		homoproblem.points1_(j, 0) = points1[j];
+		homoproblem.points1_(j, 1) = points1[dim1y + j];
+		homoproblem.points2_(j, 0) = points2[j];
+		homoproblem.points2_(j, 1) = points2[dim1y + j];
 	}
+
+
+	homoproblem.normalize2Dpoints(homoproblem.points1_, homoproblem.norm1_);
+	homoproblem.normalize2Dpoints(homoproblem.points2_, homoproblem.norm2_);
 
 
 	// HomographyEstimatorProblem *homoproblem = new HomographyEstimatorProblem();
-	boost::shared_ptr<HomographyEstimatorProblem> homoproblem_ptr(new HomographyEstimatorProblem);
-	HomographyEstimatorProblem& homoproblem = *homoproblem_ptr;
-	homoproblem.points_.resize(dim1y);
-	homoproblem.setUniformIndices(dim1y);
-	homoproblem.points_ = correspondences;
 
 	SampleConsensus<HomographyEstimatorProblem> *sac;
-	if(!strcmp("ransac", modeStr))
+	if (!strcmp("ransac", modeStr))
 	{
 		sac = new Ransac<HomographyEstimatorProblem>(1000, 0.1, 0.9);
 	}
-	else if(!strcmp("lmeds", modeStr))
+	else if (!strcmp("lmeds", modeStr))
 	{
 		sac = new Lmeds<HomographyEstimatorProblem>(1000, 0.1, 0.9);
 	}
-	else if(!strcmp("msac", modeStr))
+	else if (!strcmp("msac", modeStr))
 	{
 		sac = new Msac<HomographyEstimatorProblem>(1000, 0.1, 0.9);
 	}
-	else if(!strcmp("prosac", modeStr))
+	else if (!strcmp("prosac", modeStr))
 	{
 		sac = new Prosac<HomographyEstimatorProblem>(1000, 0.1, 0.9);
 	}
@@ -294,11 +302,12 @@ void mexFunction(int nlhs, mxArray *plhs [], int nrhs, const mxArray*prhs [])
 
 	sac->sac_model_ = homoproblem_ptr;
 	sac->computeModel(4);
-	Homography homographyModel = Homography(sac->model_coefficients_);
+	auto homographyModel = sac->model_coefficients_;
 	mexPrintf("Number of iterations: %d\n", sac->iterations_);
-	mexPrintf("Inliers size: %d (out of %d input correspondences)\n", sac->inliers_.size(), homoproblem.points_.size());
+	mexPrintf("Inliers size: %d (out of %d input correspondences)\n", sac->inliers_.size(), homoproblem.points1_.rows());
 
 	homoproblem.calculateModelUsingAllInliers(sac->inliers_, homographyModel);
+	auto H = homoproblem.norm2_.inverse() * homographyModel * homoproblem.norm1_;
 
 	auto outArray = mxCreateDoubleMatrix(3, 3, mxREAL);
 	double *outp = mxGetPr(outArray);
@@ -311,15 +320,14 @@ void mexFunction(int nlhs, mxArray *plhs [], int nrhs, const mxArray*prhs [])
 	// 	}
 	// }
 
-	// Copy the estimated homography matrix to the output matrix, note the difference between matrix's column-wise arrays vs. C's row-wise arrays convention
+	// Copy the estimated homography matrix to the output matrix, note the difference between MATLAB's column-wise arrays vs. C's row-wise arrays convention
 	for (size_t i = 0; i < 3; i++)
 	{
-		for (size_t j = 0; j < 3; j++)
+		for (size_t j = 0; i < 3; j++)
 		{
-			outp[i * 3 + j] = homographyModel.Matrix[j * 3 + i];
+			outp[i + 3 * j] = H(i, j);
 		}
 	}
 
 	plhs[0] = outArray;
-	mexUnlock();
 }
