@@ -37,7 +37,7 @@ public:
 	virtual int getSampleSize() const { return 4; }
 
 	// Take a subset of size 4 of points and estimate homography matrix using them
-	virtual bool computeModelCoefficients(const std::vector<int> & indices, MatrixXd& model) const
+	virtual bool computeModelCoefficients(const std::vector<int> & indices, MatrixXd& model)
 	{
 		if (indices.size() != getSampleSize())
 		{
@@ -61,20 +61,27 @@ public:
 
 	virtual void optimizeModelCoefficients(const vector<int> & inliers, const MatrixXd& model, MatrixXd& optimized_model)
 	{
-		optimized_model = model;
+		// optimized_model = model;
+		for (size_t i = 0; i < 3; i++)
+		{
+			for (size_t j = 0; j < 3; j++)
+			{
+				optimized_model(i, j) = model(i, j);
+			}
+		}
 	}
 
 	// It will return a matrix H, the homography matrix, such that x1=H*x2
 	// Note: points are assumed to be normalized and in homogeneous coordinate
 	// Sizes of two sets of points must be equal. for performace purposes, this condition is not checked in this function
-	// Note: since normalise2Dpoints works in-place on the points matrix, normalizing points inside this function will 
+	// Note: since normalise2Dpoints works in-place on the points matrix, normalizing points inside this function will
 	// harm our collection of points. But because of two observations, we are allowed to normalise points inside this function
 	// and it will cause no harm:
-	//	1) Points from each step of ransac will be passed to this function to calculate the homography matrix. To do so, we will 
+	//	1) Points from each step of ransac will be passed to this function to calculate the homography matrix. To do so, we will
 	//	   copy those points from the main point matrix to temporary matrices. So normalisation won't affect the original matrix.
 	//  2) After exhausting the SAC operation, the final Homography matrix will be calculated using all of the inliers. After this
 	//	   calculation, the program will return. So affecting the data points, won't do harm.
-	MatrixXd calculateHomography(MatrixXd& x1, MatrixXd& x2) const
+	MatrixXd calculateHomography(MatrixXd& x1, MatrixXd& x2)
 	{
 		MatrixXd T1, T2;
 		normalize2Dpoints(x1, T1);
@@ -121,18 +128,18 @@ public:
 			p1.row(i) = points1_.row(inliers[i]);
 			p2.row(i) = points2_.row(inliers[i]);
 		}
-		auto H = calculateHomography(p1, p2);
+		auto H = MatrixXd(calculateHomography(p1, p2));
 
 		finalModel = H;
 	}
 
 	/// evaluate the score for the elements at indices based on this model.
 	/// low scores mean a good fit.
-	virtual void getSelectedDistancesToModel(const MatrixXd& model, const vector<int> & indices, vector<double> & scores) const
+	virtual void getSelectedDistancesToModel(const MatrixXd& model, const vector<int> & indices, vector<double> & scores)
 	{
 		scores.resize(indices.size());
 		// Iterate through correspondences and calculate the projection error
-		
+
 		auto H = model;
 		for (size_t i = 0; i < indices.size(); ++i)
 		{
@@ -149,7 +156,7 @@ public:
 	}
 
 	// normalize 2d points so that they would have a zero mean and their mean distance from origin would be sqrt(2)
-	void normalize2Dpoints(MatrixXd& points, MatrixXd& normalizationMat) const
+	void normalize2Dpoints(MatrixXd& points, MatrixXd& normalizationMat)
 	{
 		double meanx = points.col(0).mean();
 		double meany = points.col(1).mean();
